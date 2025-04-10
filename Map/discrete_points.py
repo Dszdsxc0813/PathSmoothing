@@ -12,19 +12,21 @@ def generate_discrete_points(game_map, seed=None):
     rng = random.Random(seed)  # 创建独立随机生成器
     W, H = MAP_WIDTH, MAP_HEIGHT
     D = MIN_CONNECT_DIS
+    # 理论最大点数估算公式
     n = int((4 * W * H) / (D ** 2))
 
-    # 预处理可行区域（使用rng进行shuffle）
     free_space = [
         (x, y)
         for y in range(H)
         for x in range(W)
         if game_map[y][x] == 0
     ]
-    rng.shuffle(free_space)  # 使用rng替代random
+
+    # 打乱free_space元素顺序，随机化采样顺序
+    rng.shuffle(free_space)
 
     points = []
-    spatial_grid = {}
+    spatial_grid = {}  # 空间索引加速碰撞检测，索引字典: { (grid_x, grid_y): [points] }
 
     # 生成候选点（随机性完全由rng控制）
     for x, y in free_space:
@@ -37,10 +39,26 @@ def generate_discrete_points(game_map, seed=None):
         grid_x = x // D
         grid_y = y // D
         conflict = False
-        # ...（中间的空间检查逻辑保持不变，无随机性）...
 
+        # 检查周围3x3网格区域，是否有点与candidate冲突
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                neighbor_key = (grid_x + dx, grid_y + dy)
+                if neighbor_key in spatial_grid:
+                    for pt in spatial_grid[neighbor_key]:
+                        if candidate.distance(pt) < D:
+                            conflict = True
+                            break
+                    if conflict:
+                        break
+                if conflict:
+                    break
+            if conflict:
+                break
+
+        # 精确距离验证（确定性计算）
+        # 检验 candidate 与 points 中的每个点的距离是否都大于D
         if not conflict:
-            # 精确距离验证（确定性计算）
             valid = all(candidate.distance(p) >= D for p in points)
             if valid:
                 points.append(candidate)
@@ -58,7 +76,6 @@ def visualize_with_ends(game_map, points, start, goal):
     import matplotlib.pyplot as plt
 
     plt.figure(figsize=(12, 8))
-
     # 绘制地图背景
     plt.imshow(game_map, cmap='gray_r', origin='lower')
 
