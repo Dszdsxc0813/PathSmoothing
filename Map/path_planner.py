@@ -1,5 +1,6 @@
-# path_planner.py（修正版）
+# path_planner.py
 import heapq
+import math
 import numpy as np
 from shapely.geometry import Point, LineString  # 添加Point的显式导入
 from discrete_graph import is_valid_connection
@@ -70,9 +71,66 @@ class PathPlanner:
 
         return path
 
+    def optimize_path(self, original_path):
+        """路径优化函数"""
+        if len(original_path) < 3:
+            return original_path.copy()
+
+        optimized = list(original_path)
+        modified = True
+
+        while modified:
+            modified = False
+            i = 1  # 从第二个节点开始检查
+
+            while i < len(optimized) - 1:
+                prev_node = optimized[i - 1]
+                curr_node = optimized[i]
+                next_node = optimized[i + 1]
+
+                # 检查前后节点是否可直接连接
+                if self.is_valid_connection(prev_node, next_node):
+                    del optimized[i]
+                    modified = True
+                else:
+                    i += 1
+        return optimized
+
+    def is_valid_connection(self, node1, node2):
+        """碰撞检测核心方法"""
+        line = LineString([(node1.x, node1.y), (node2.x, node2.y)])
+
+        # 获取线段经过的所有网格坐标
+        x0, y0 = node1.x, node1.y
+        x1, y1 = node2.x, node2.y
+
+        dx = x1 - x0
+        dy = y1 - y0
+        distance = math.hypot(dx, dy)
+
+        # 采样间隔设为0.5个地图单位
+        steps = max(int(distance / 0.5), 1)
+        step_x = dx / steps
+        step_y = dy / steps
+
+        for i in range(steps + 1):
+            x = x0 + i * step_x
+            y = y0 + i * step_y
+            if self.is_obstacle(x, y):
+                return False
+        return True
+
+
+    def is_obstacle(self, x, y):
+        """判断指定坐标是否为障碍物"""
+        map_h, map_w = self.game_map.shape
+        if x < 0 or x >= map_w or y < 0 or y >= map_h:
+            return True  # 超出边界视为障碍物
+        return self.game_map[int(y)][int(x)] == 1
+
 
     @staticmethod
-    def visualize_paths(original, game_map):
+    def visualize_paths(original,optimized, game_map):
         """可视化路径对比"""
         import matplotlib.pyplot as plt
 
@@ -82,9 +140,16 @@ class PathPlanner:
         # 绘制原始路径
         ox = [p.x for p in original]
         oy = [p.y for p in original]
-        plt.plot(ox, oy, 'r--', label='Original Path', linewidth=2)
-
+        plt.plot(ox, oy, 'r--', label='Original Path', linewidth=2, alpha=0.7)
         plt.scatter(ox, oy, c='red', s=30, zorder=3)
+
+        # 绘制优化路径
+        if optimized:
+            opt_x = [p.x for p in optimized]
+            opt_y = [p.y for p in optimized]
+            plt.plot(opt_x, opt_y, 'b-', label='Optimized Path', linewidth=2)
+            plt.scatter(opt_x, opt_y, c='blue', s=50, zorder=3, marker='s')
+
         plt.legend()
         plt.title("Path Optimization Comparison")
         plt.show()
