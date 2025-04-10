@@ -1,0 +1,99 @@
+# map_generator.py
+import numpy as np
+import random
+from config import *
+
+
+def generate_sparse_maze(
+        min_wall_length=MIN_WALL_LEN,
+        max_wall_length=MAX_WALL_LEN,
+        l_shape_ratio=L_SHAPE_RATIO,
+        seed=None  # 新增种子参数
+):
+    """生成均匀分布且包含L型障碍的迷宫地图
+    Args:
+        seed (int, optional): 随机种子，控制生成结果的确定性
+    """
+    # 初始化随机数生成器
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+
+    # 初始化全开放地图
+    maze = np.zeros((MAP_HEIGHT, MAP_WIDTH), dtype=int)
+
+    # 强制保留中央通道（保持确定性）
+    mid_x = MAP_WIDTH // 2
+    mid_y = MAP_HEIGHT // 2
+    for y in range(MAP_HEIGHT):
+        maze[y][mid_x] = 0
+    for x in range(mid_x, MAP_WIDTH):
+        maze[mid_y][x] = 0
+
+    # 区域划分参数
+    region_width = MAP_WIDTH // NUM_REGIONS_X
+    region_height = MAP_HEIGHT // NUM_REGIONS_Y
+    min_region_walls = MIN_NUM_WALLS // NUM_REGIONS_X
+    max_region_walls = MAX_NUM_WALLS // NUM_REGIONS_X
+    walls_added = 0
+    l_shape_walls = 0
+
+    # 分区域生成墙体（现在结果可重复）
+    for ry in range(NUM_REGIONS_Y):
+        for rx in range(NUM_REGIONS_X):
+            x_start = rx * region_width
+            x_end = (rx + 1) * region_width if rx != NUM_REGIONS_X - 1 else MAP_WIDTH
+            y_start = ry * region_height
+            y_end = (ry + 1) * region_height if ry != NUM_REGIONS_Y - 1 else MAP_HEIGHT
+
+            # 使用random代替np.random保证不同库的随机独立性
+            region_walls = random.randint(min_region_walls, max_region_walls)
+            for _ in range(region_walls):
+                # --- 确定性随机生成开始 ---
+                start_x = random.randint(x_start, x_end - 1)
+                start_y = random.randint(y_start, y_end - 1)
+
+                # 跳过中央通道（保持确定性）
+                if (start_y == mid_y and x_start <= mid_x < x_end) or \
+                        (start_x == mid_x and y_start <= mid_y < y_end):
+                    continue
+
+                is_horizontal = random.choice([True, False])
+                wall_length = random.randint(min_wall_length, max_wall_length)
+
+                # 墙体生成（保持原逻辑）
+                end_x, end_y = start_x, start_y
+                if is_horizontal:
+                    end_x = min(start_x + wall_length, x_end - 1)
+                    for x in range(start_x, end_x + 1):
+                        if maze[start_y][x] == 0:
+                            maze[start_y][x] = 1
+                else:
+                    end_y = min(start_y + wall_length, y_end - 1)
+                    for y in range(start_y, end_y + 1):
+                        if maze[y][start_x] == 0:
+                            maze[y][start_x] = 1
+
+                # L型生成（现在可重复）
+                if random.random() < l_shape_ratio:
+                    direction = random.choice([1, -1])
+                    extend_length = random.randint(2, max_wall_length // 2)
+
+                    if is_horizontal:
+                        new_y = start_y + direction
+                        if 0 <= new_y < MAP_HEIGHT:
+                            for x in range(start_x, min(end_x + extend_length, MAP_WIDTH)):
+                                if maze[new_y][x] == 0:
+                                    maze[new_y][x] = 1
+                            l_shape_walls += 1
+                    else:
+                        new_x = start_x + direction
+                        if 0 <= new_x < MAP_WIDTH:
+                            for y in range(start_y, min(end_y + extend_length, MAP_HEIGHT)):
+                                if maze[y][new_x] == 0:
+                                    maze[y][new_x] = 1
+                            l_shape_walls += 1
+
+                walls_added += 1
+
+    return maze
