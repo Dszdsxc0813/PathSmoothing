@@ -204,6 +204,6 @@ class PathSmoother:
 
         # 调用校正模块
         return self.corrector.calculate_correction(
-            current_pos, segment_start, segment_end, alpha_deg
+            current_pos, segment_start, segment_end, alpha_deg,beta
         )
 
