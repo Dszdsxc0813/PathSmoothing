@@ -1,0 +1,373 @@
+# path_smoother.py
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+from shapely.geometry import LineString, Point, Polygon
+from path_corrector import PathCorrector
+from robot_state import *
+
+
+class PathSmoother:
+    def __init__(self, game_map, turn_radius):
+        """
+        增强版路径平滑优化器
+        :param game_map: 二维障碍物矩阵（0=可行，1=障碍）
+        :param turn_radius: 最小转弯半径（像素单位）
+        """
+        self.game_map = game_map
+        self.turn_radius = turn_radius
+        self.safety_margin = 0  # 安全边界距离
+        # 修正距离边界先不考虑，修正边界 = 最小障碍长度+安全边界距离
+        self.corrector = PathCorrector(self.turn_radius+self.safety_margin)
+        self.optimized_path = []  # 新增优化路径存储
+
+    def smooth_path(self, raw_path):
+        """
+        主优化流程：模拟机器人沿路径动态移动并优化
+        :param raw_path: 引导路径（Point对象列表）
+        :return: 几何拓扑优化后的路径（Point对象列表）
+        """
+        # temp：先考虑多个点的优化
+        if len(raw_path) < 2:
+            return raw_path
+
+        # 初始化机器人状态：从起点开始，初始朝向由起点到第一个路径点
+        robot = RobotState(
+            current_pos=Point(raw_path[0].x, raw_path[0].y),
+            current_segment_idx=0,
+            heading_angle=self._calculate_initial_heading(raw_path[0], raw_path[1])
+        )
+
+        optimized_path = [robot.current_pos]
+
+        # 遍历所有路径段进行动态修正
+        while robot.current_segment_idx < len(raw_path) - 1:
+            # 获取当前路径段 (A->B)
+            segment_start = raw_path[robot.current_segment_idx]
+            segment_end = raw_path[robot.current_segment_idx + 1]
+
+            # 计算β（公式3）
+            beta_rad = self._calculate_beta(robot, segment_start, segment_end)
+
+            # 计算D_ac_expected和D_ac_actual（公式4-5）
+            D_ac_expected = 2 * self.turn_radius * (math.sin(beta_rad / 2) ** 2)
+            D_ac_actual = self._calculate_actual_distance(robot.current_pos, segment_start, segment_end)
+
+            # --------------------------
+            # 关键补充：状态判断与动作执行
+            # --------------------------
+            # Case 1: 未到达转向点，继续沿当前路径前进
+            if D_ac_actual > D_ac_expected:
+                next_point = self._move_forward(robot, segment_end)
+                optimized_path.append(next_point)
+                robot = self._update_robot_state(robot, next_point, raw_path)
+
+            # Case 2: 到达转向点，根据β正负转向
+            elif math.isclose(D_ac_actual, D_ac_expected, rel_tol=1e-3):
+                turn_direction = "right" if beta_rad > 0 else "left"
+                corrected_points = self._execute_turn(robot, segment_end, turn_direction)
+                optimized_path.extend(corrected_points)
+                robot = self._update_robot_state(robot, corrected_points[-1], raw_path)
+
+            # Case 3: 超过转向点，执行路径矫正
+            else:
+                corrected_points = self._apply_correction(robot, segment_start, segment_end, D_ac_expected, D_ac_actual)
+                optimized_path.extend(corrected_points)
+                robot = self._update_robot_state(robot, corrected_points[-1], raw_path)
+
+        return optimized_path
+
+        # # 执行几何拓扑优化流程
+        # optimized = self._geometric_optimization(raw_path)
+        # optimized = []
+        # return optimized
+
+    # 这个函数大概率要删掉了
+    def _geometric_optimization(self, path):
+        """几何拓扑优化核心方法"""
+        global alpha_rad
+        self.optimized_path = []  # 重置优化路径
+        path = [Point(p) for p in path]  # 确保转为Point对象
+
+        for i in range(len(path) - 1):
+            current_point = path[i]
+            next_point = path[i + 1]
+
+            # # 添加当前点
+            # self.optimized_path.append(current_point)
+
+            # 获取路径段信息
+            # 获取前一个点（机器人运动方向由prev_point到current_point）
+            if i == 0:
+                prev_point = current_point  # 第一个点特殊处理
+            else:
+                prev_point = path[i - 1]
+
+            # 计算当前朝向（与 y 轴正方向的夹角）
+                # --------------------------
+                # 关键修正：计算α（弧度制）
+                # --------------------------
+                # 机器人前进方向向量 (dx, dy) = current_point - prev_point
+                dx = current_point.x - prev_point.x
+                dy = current_point.y - prev_point.y
+                # 计算α（相对于y轴正方向的弧度）
+                alpha_rad = math.atan2(dx, dy) if (dx, dy) != (0, 0) else 0.0
+
+            # 公式4
+            D_ac_expected = 2 * self.turn_radius * (math.sin(beta_rad / 2) ** 2)
+            D_ac_actual = self._calculate_actual_distance(
+                current_pos=(current_point.x, current_point.y),
+                segment_start=(prev_point.x, prev_point.y),
+                segment_end=(next_point.x, next_point.y)
+            )
+
+            # 执行路径修正
+            corrected_points = self._apply_correction(
+                current_point=current_point,
+                next_point=next_point,
+                beta_rad=beta_rad,
+                D_ac_expected=D_ac_expected,
+                D_ac_actual=D_ac_actual
+            )
+
+            # 添加修正点
+            self.optimized_path.extend(corrected_points)
+
+        self.optimized_path.append(path[-1])
+        return self._remove_collision_points(self.optimized_path)
+
+    def _calculate_initial_heading(self, start_point, next_point):
+        """计算初始朝向角α（从起点到第一个路径点的方向）"""
+        dx = next_point.x - start_point.x
+        dy = next_point.y - start_point.y
+        return math.atan2(dx, dy)  # 相对于y轴正方向
+
+    def _calculate_beta(self, robot, segment_start, segment_end):
+        """公式3实现：计算前进方向与目标路径夹角β"""
+        x1, y1 = segment_start
+        x2, y2 = segment_end
+
+        # 计算路径方向角
+        dx_segment = x2 - x1
+        dy_segment = y2 - y1
+        # 计算θ（相对于y轴正方向的弧度）
+        theta_rad = math.atan2(dx_segment, dy_segment) if (dx_segment, dy_segment) != (0, 0) else 0.0  # 修正点：交换dx和dy顺序
+
+        # β = θ - α
+        beta_rad = theta_rad - robot.heading_angle
+
+        # 规范化到[-π, π]
+        beta_rad = (beta_rad + math.pi) % (2 * math.pi) - math.pi
+        return beta_rad
+
+    def _calculate_actual_distance(self, current_pos, segment_start, segment_end):
+        """公式5：计算机器人到路径段的实际距离"""
+        x0, y0 = current_pos.x, current_pos.y
+        x1, y1 = segment_start.x, segment_start.y
+        x2, y2 = segment_end.x, segment_end.y
+
+        numerator = abs((x2 - x1) * (y1 - y0) - (x1 - x0) * (y2 - y1))
+        denominator = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+
+        return numerator / denominator if denominator > 1e-6 else float('inf')
+
+    def _update_robot_state(self, robot, new_pos, raw_path):
+        """更新机器人位置和路径段索引"""
+        # 判断是否进入下一个路径段
+        segment_end = raw_path[robot.current_segment_idx + 1]
+        distance_to_end = math.hypot(
+            new_pos.x - segment_end.x,
+            new_pos.y - segment_end.y
+        )
+        if distance_to_end < self.turn_radius:
+            robot.current_segment_idx += 1
+
+        # 更新朝向角（由当前位置到新位置的方向）
+        dx = new_pos.x - robot.current_pos.x
+        dy = new_pos.y - robot.current_pos.y
+        new_heading = math.atan2(dx, dy)  # 相对于y轴
+
+        return RobotState(
+            current_pos=new_pos,
+            current_segment_idx=robot.current_segment_idx,
+            heading_angle=new_heading
+        )
+### _apply_correction()没有改，生成矫正点的部分还没有修
+    def _apply_correction(self, current_point, next_point, beta_rad, D_ac_expected, D_ac_actual):
+        """应用路径校正逻辑"""
+        correction_points = []
+
+        # 状态判断
+        if D_ac_actual > D_ac_expected + self.safety_margin:
+            # 保持当前路径
+            return []
+
+        elif abs(D_ac_actual - D_ac_expected) <= self.safety_margin:
+            # 生成圆弧过渡
+            arc_points = self._generate_turn_arc(
+                current_point=current_point,
+                next_point=next_point,
+                beta=beta
+            )
+            correction_points.extend(arc_points)
+
+        else:
+            # 需要路径矫正
+            corrected = self._calculate_correction_path(
+                current_point=current_point,
+                next_point=next_point,
+                beta_deg=beta
+            )
+            correction_points.extend(corrected)
+
+        return correction_points
+
+    def _generate_turn_arc(self, current_point, next_point, beta, num_points=10):
+        """生成转弯圆弧点集"""
+        radius = self.turn_radius
+        center = self._calculate_arc_center(current_point, beta, radius)
+
+        # 计算起始和终止角度
+        start_angle = math.atan2(current_point.y - center.y,
+                                 current_point.x - center.x)
+        end_angle = start_angle + math.radians(beta)
+
+        # 生成圆弧点
+        points = []
+        for i in range(num_points + 1):
+            angle = start_angle + (end_angle - start_angle) * i / num_points
+            x = center.x + radius * math.cos(angle)
+            y = center.y + radius * math.sin(angle)
+            points.append(Point(x, y))
+
+        return points
+
+    def _calculate_arc_center(self, current_point, beta, radius):
+        """计算圆弧圆心坐标"""
+        beta_rad = math.radians(beta)
+        dx = radius * math.cos(beta_rad / 2)
+        dy = radius * math.sin(beta_rad / 2)
+        return Point(current_point.x - dx, current_point.y + dy)
+
+    def _remove_collision_points(self, path):
+        """移除导致碰撞的路径点"""
+        safe_path = []
+        for point in path:
+            if not self._is_collision(point):
+                safe_path.append(point)
+        return safe_path
+
+    def _is_collision(self, point):
+        """碰撞检测"""
+        x, y = int(point.x), int(point.y)
+        if 0 <= x < self.game_map.shape[1] and 0 <= y < self.game_map.shape[0]:
+            return self.game_map[y][x] == 1
+        return True  # 越界视为碰撞
+
+    def _calculate_correction_path(self, current_point, next_point, beta_deg):
+        """
+        修改后的参数传递
+        :param beta_deg: 从_geometric_optimization传入的β角度（度）
+        """
+        current_pos = (current_point.x, current_point.y)
+        prev_point = self._get_previous_point(current_point)  # 新增方法获取前驱节点
+        segment_start = (prev_point.x, prev_point.y)
+        segment_end = (next_point.x, next_point.y)
+        next_segment_end = self._get_next_segment_end(next_point)  # 获取下一段终点
+
+        # 调用校正器并传递所有必要参数
+        return self.corrector.calculate_correction(
+            current_pos=current_pos,
+            segment_start=segment_start,
+            segment_end=segment_end,
+            next_segment_end=next_segment_end,
+            alpha_deg=self._calculate_alpha_deg(prev_point, current_point),  # 计算alpha_deg
+            beta_deg=beta_deg  # 新增beta_deg参数
+        )
+
+    def _get_next_segment_end(self, current_point):
+        """新增方法：获取下一段路径终点"""
+        try:
+            index = self.optimized_path.index(current_point)
+            if index + 2 < len(self.optimized_path):
+                return self.optimized_path[index + 2]
+            elif index + 1 < len(self.optimized_path):
+                return self.optimized_path[index + 1]
+            else:
+                return current_point
+        except ValueError:
+            return current_point
+
+    def _get_previous_point(self, current_point):
+        """修正后的前驱节点获取方法"""
+        try:
+            index = self.optimized_path.index(current_point)
+            return self.optimized_path[index - 1] if index > 0 else current_point
+        except ValueError:
+            return current_point
+
+    def _calculate_alpha_deg(self, prev_point, current_point):
+        """计算alpha角度（机器人当前朝向）"""
+        dx = current_point.x - prev_point.x
+        dy = current_point.y - prev_point.y
+        return math.degrees(math.atan2(dy, dx))
+
+    @staticmethod
+    def visualize_comparison(raw_path, optimized_path, smooth_path, game_map):
+        """
+        三路径对比可视化
+        :param raw_path: 原始路径（Point列表）
+        :param optimized_path: 引导路径（Point列表）
+        :param smooth_path: 平滑路径（Point列表）
+        :param game_map: 二维障碍物矩阵
+        """
+        # 创建画布
+        fig, ax = plt.subplots(figsize=(12, 12))
+
+        # 绘制障碍物地图
+        ax.imshow(game_map, cmap="binary", origin="lower",
+                  extent=[0, game_map.shape[1], 0, game_map.shape[0]])
+
+        # 绘制原始路径（红色虚线）
+        if raw_path:
+            raw_x = [p.x for p in raw_path]
+            raw_y = [p.y for p in raw_path]
+            ax.plot(raw_x, raw_y, 'r--', linewidth=1.5, label="Raw Path", alpha=0.7)
+
+        # 绘制引导路径（绿色点划线）
+        if optimized_path:
+            opt_x = [p.x for p in optimized_path]
+            opt_y = [p.y for p in optimized_path]
+            ax.plot(opt_x, opt_y, 'g-.', linewidth=2, label="Optimized Path", markersize=8)
+
+        # 绘制平滑路径（蓝色实线+关键点标记）
+        if smooth_path:
+            smooth_x = [p.x for p in smooth_path]
+            smooth_y = [p.y for p in smooth_path]
+            line = ax.plot(smooth_x, smooth_y, 'b-', linewidth=2.5, label="Smooth Path")
+            # 标记拐点（跳过起点终点）
+            ax.scatter(smooth_x[1:-1], smooth_y[1:-1],
+                       c=line[0].get_color(), s=80, marker='o', edgecolors='k',
+                       zorder=3, label="Smooth Turning Points")
+
+        # 统一标记起点终点
+        if raw_path:
+            start_point = next((p for p in [raw_path, optimized_path, smooth_path] if p), None)
+            goal_point = next((p[-1] for p in [raw_path, optimized_path, smooth_path] if p), None)
+            if start_point:
+                ax.scatter(start_point[0].x, start_point[0].y,
+                           c='lime', s=200, marker='P', edgecolors='k', label="Start")
+            if goal_point:
+                ax.scatter(goal_point.x, goal_point.y,
+                           c='gold', s=200, marker='*', edgecolors='k', label="Goal")
+
+        # 坐标轴设置
+        ax.set_xlim(0, game_map.shape[1])
+        ax.set_ylim(0, game_map.shape[0])
+        ax.set_aspect('equal')
+        ax.grid(True, linestyle='--', alpha=0.4)
+        ax.set_title("Path Planning Comparison\n(Raw → Optimized → Smooth)", fontsize=14)
+        ax.legend(loc='upper left', fontsize=10)
+
+        plt.tight_layout()
+        plt.show()
