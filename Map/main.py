@@ -43,19 +43,18 @@ if __name__ == "__main__":
     print(f"初始路径点如下：")
     for index, i in enumerate(raw_path):
         print(f"索引: {index}, 坐标: ({i.x}, {i.y})")
-    optimized_path = planner.optimize_path(raw_path)
+    guide_path = planner.optimize_path(raw_path)
     # 可视化
     if raw_path :
-        planner.visualize_paths(raw_path, optimized_path, custom_map)
+        visualize_paths(raw_path, guide_path, custom_map)
     else:
         print("路径规划失败！")
 
     # 路径处理
-    robot = points[118]
     # 初始化优化器（turn_radius与离散点间距一致）
-    smoother = PathSmoother(game_map=custom_map, turn_radius=MIN_OBSTACLE_LEN)
+    smoother = PathSmoother(game_map=custom_map, turn_radius=MIN_TURN_R)
     # 执行优化
-    smooth_path = smoother.smooth_path(optimized_path)
+    smooth_path = smoother.smooth_path(guide_path,visualize_step=True)
 
     # 可视化对比
-    PathSmoother.visualize_comparison(raw_path, optimized_path, smooth_path, custom_map)
+    PathSmoother.visualize_comparison(raw_path, guide_path, smooth_path, custom_map)
