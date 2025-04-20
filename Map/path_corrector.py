@@ -1,6 +1,10 @@
 import math
+from typing import List
+
 import numpy as np
 from matplotlib import pyplot as plt
+
+from Map.robot_state import Point
 from robot_state import *
 
 class PathCorrector:
@@ -12,7 +16,7 @@ class PathCorrector:
                           custom_map,
                           guide_path,
                           optimized_path,
-                          segment_after_next_end=None,
+                          current_R,
                           visualize_steps=None):
         """
         完整路径矫正流程：
@@ -28,8 +32,9 @@ class PathCorrector:
         if visualize_steps is None:
             visualize_steps = ['centers', 'arc1', 'arc2', 'line', 'arc3', 'full']
         Z = robot.current_pos
-        R = self.turn_radius
+        R = current_R
         alpha = robot.heading_angle
+        path = []
 
         # 1) 计算圆 O2' 的圆心
         # temp:这需要看角度！！！
@@ -47,9 +52,57 @@ class PathCorrector:
         y_O2 = np.float64(Z.y) + np.float64(s * R * np.cos(alpha))
         O2_center = Point(x_O2, y_O2)
 
-        # 2) 计算圆 O3 的圆心和切入点 X
-        O3_center, X = self._compute_O3_and_X(segment_start, segment_end, O2_center)
+        current_beta = self._calculate_beta(robot,segment_start,segment_end)
+        if math.sin(current_beta) > 0:
+            turn_direction = "left"
+        elif math.sin(current_beta) < 0:
+            turn_direction = "right"
+        else:
+            turn_direction = None
 
+        # 2) 计算圆 O3 的圆心和切入点 X
+        O3_center, X = self._compute_O3_and_X(segment_start, segment_end, O2_center, 4, custom_map, guide_path, optimized_path)
+        # 处理没有异侧点O3的情况
+        if O3_center ==  O2_center:
+            X = self._compute_fallback_X(O2_center,R,segment_start,segment_end,segment_next_end)
+
+            # 分步可视化：圆心
+            if visualize_steps and 'centers' in visualize_steps:
+                self._visualize_centers(custom_map, guide_path, optimized_path,
+                                        [O2_center, O3_center, X],
+                                        ['O2', 'O3', 'X'])
+
+            arc1 = self.generate_arc( O2_center, R, Z, X, turn_direction)
+            # 6) 直线 X->N
+            N_and_O = self.compute_blend_start(segment_start, segment_end, segment_next_end, R, False)
+            N = N_and_O[0]
+            line1 = self.generate_line(X, N)
+
+            if visualize_steps and 'line' in visualize_steps:
+                self._visualize_line(custom_map, guide_path, optimized_path, line1, 'Line: X->N')
+
+            # 在生成 arc1、arc2、line1 后添加如下代码
+            # ------------------------- 碰撞检测 -------------------------
+            all_segments = [arc1, line1]
+            for seg in all_segments:
+                if self.check_collision_segment(seg, custom_map):
+                    # 触发路径调整逻辑（例如插入中间节点或退回原始路径）
+                    print("路径段碰撞障碍物！")
+                    # 发现碰撞，不直接放弃
+                    # 在当前位置Z和目标路径AB之间尝试插入中间节点重规划
+                    return self._insert_midpoint_and_replan(
+                        Z,
+                        segment_start,
+                        segment_end,
+                        segment_next_end,
+                        custom_map,
+                        guide_path,
+                        optimized_path
+                    )
+
+            path.extend(arc1)
+            path.extend(line1)
+            return path
 
         # 3) 计算两圆 O2', O3 的切点 H
         H = self.compute_circle_tangent_point(O2_center, O3_center, R)
@@ -57,61 +110,94 @@ class PathCorrector:
         # 分步可视化：圆心
         if visualize_steps and 'centers' in visualize_steps:
             self._visualize_centers(custom_map, guide_path, optimized_path,
-                                    [O2_center, O3_center, X,H],
-                                    ['O2', 'O3', 'X', 'H'])
+                                    [O2_center, O3_center, H],
+                                    ['O2', 'O3', 'H'])
 
         # 4) 圆弧 Z->H
-        arc1 = self.generate_arc(O2_center, R, Z, H)
+        arc1 = self.generate_arc(O2_center, R, Z, H, turn_direction)
         if visualize_steps and 'arc1' in visualize_steps:
             self._visualize_arc(custom_map, guide_path, optimized_path, arc1,'Arc: Z->H')
 
         # 5) 圆弧 H->X
-        arc2 = self.generate_arc(O3_center, R, H, X)
+        arc2 = self.generate_arc(O3_center, R, H, X, turn_direction)
         # 测试完整弧线
         if visualize_steps and 'arc2' in visualize_steps:
             self._visualize_arc(custom_map, guide_path, optimized_path, arc2, 'Arc: H->X')
 
         # 6) 直线 X->N
-        N = self.compute_blend_start(segment_start, segment_end, segment_next_end, R)
-        line1 = self.generate_line(X, N)
+        if segment_end != segment_next_end:
+            N_and_O = self.compute_blend_start(segment_start, segment_end, segment_next_end, R, False)
+            N = N_and_O[0]
+            line1 = self.generate_line(X, N)
+        else:
+            N = segment_end
+            # 在生成 arc1、arc2、line1 后添加如下代码
+            # ------------------------- 碰撞检测 -------------------------
+            all_segments = [arc1, arc2]
+            for seg in all_segments:
+                if self.check_collision_segment(seg, custom_map):
+                    # 触发路径调整逻辑（例如插入中间节点或退回原始路径）
+                    print("路径段碰撞障碍物！")
+                    return self._insert_midpoint_and_replan(
+                        Z,
+                        segment_start,
+                        segment_end,
+                        segment_next_end,
+                        custom_map,
+                        guide_path,
+                        optimized_path
+                    )
+
+            path.extend(arc1)
+            path.extend(arc2)
+            path.append(N)
+            return path
         if visualize_steps and 'line' in visualize_steps:
             self._visualize_line(custom_map, guide_path, optimized_path, line1, 'Line: X->N')
 
-        path = []
+        # 在生成 arc1、arc2、line1 后添加如下代码
+        # ------------------------- 碰撞检测 -------------------------
+        all_segments = [arc1, arc2, line1]
+        for seg in all_segments:
+            if self.check_collision_segment(seg, custom_map):
+                # 触发路径调整逻辑（例如插入中间节点或退回原始路径）
+                print("路径段碰撞障碍物！")
+                # 发现碰撞，不直接放弃，尝试插入中间节点重规划
+                return self._insert_midpoint_and_replan(
+                    Z,
+                    segment_start,
+                    segment_end,
+                    segment_next_end,
+                    custom_map,
+                    guide_path,
+                    optimized_path
+                )
+
         path.extend(arc1)
         path.extend(arc2)
         path.extend(line1)
 
-        # --- 7) 生成圆弧 N->Z2 ---
-        if segment_after_next_end:
-            O4_center = self.compute_blend_center(segment_end,
-                                                  segment_next_end,
-                                                  segment_after_next_end, R)
-            Z2 = self.compute_blend_start(segment_end,
-                                          segment_next_end,
-                                          segment_after_next_end, R)
-            arc3 = self.generate_arc(O4_center, R, N, Z2)
-            if visualize_steps and 'arc3' in visualize_steps:
-                self._visualize_arc(custom_map, guide_path, optimized_path, arc3, 'Circle O4 Arc: N->Z2')
-            path.extend(arc3)
-
-            # 全量可视化
-        # if visualize_steps and 'full' in visualize_steps:
-        #     self.visualize_correction(robot,
-        #                             segment_start,
-        #                             segment_end,
-        #                             segment_next_end,
-        #                             segment_after_next_end,
-        #                             custom_map)
+        # # --- 7) 生成圆弧 N->Z2 ---
+        # if segment_after_next_end:
+        #     O4_center = self.compute_blend_center(segment_end,
+        #                                           segment_next_end,
+        #                                           segment_after_next_end, R)
+        #     Z2 = self.compute_blend_start(segment_end,
+        #                                   segment_next_end,
+        #                                   segment_after_next_end, R)
+        #     arc3 = self.generate_arc(O4_center, R, N, Z2)
+        #     if visualize_steps and 'arc3' in visualize_steps:
+        #         self._visualize_arc(custom_map, guide_path, optimized_path, arc3, 'Circle O4 Arc: N->Z2')
+        #     path.extend(arc3)
 
         return path
 
-    def _compute_O3_and_X(self, A, B, O2_center):
+    def _compute_O3_and_X(self, A, B, O2_center, current_R, custom_map, guide_path, optimized_path):
         """
         根据论文公式 10-16，计算圆 O3 圆心和切入点 X
         且保证 O2_center 和 O3_center 分布在路径段 AB 的两侧
         """
-        R = self.turn_radius
+        R = current_R
         x1 = np.float64(A.x)
         y1 = np.float64(A.y)
         x2 = np.float64(B.x)
@@ -149,6 +235,19 @@ class PathCorrector:
             L_k = None
             L_x_const = x1 + offset_x
 
+        # 可视化平行直线L
+        self._visualize_parallel_line(
+            custom_map,  # 障碍物地图数组
+            guide_path,  # 引导路径列表
+            optimized_path,  # 当前已优化路径列表
+            [],  # line_pts 这里传空，因为只是显示 L 和圆 O2
+            title="辅助可视化: L & O2",
+            L_k=L_k,
+            L_b=L_b,
+            circle_center=O2_center,
+            circle_radius=2 * R
+        )
+
         # 6) 求 L 与圆 O2 的交点（代入直线到圆方程中）
         # 圆心 O2，半径 2R（因为 O2 和 O3 间距为 2R）
         r = 2 * R
@@ -159,7 +258,9 @@ class PathCorrector:
 
             disc = B_quad**2 - 4 * A_quad * C_quad
             if disc < 0:
-                raise ValueError("No intersection between O2' and L")
+                # raise ValueError("No intersection between O2' and L")
+                X_fallback = Point(-1, -1)
+                return O2_center, X_fallback  # 直接使用O2作为圆心，X_fallback本来应该为BC段上的切入点
             sqrt_disc = math.sqrt(disc)
             x_a = (-B_quad + sqrt_disc) / (2 * A_quad)
             x_b = (-B_quad - sqrt_disc) / (2 * A_quad)
@@ -177,14 +278,19 @@ class PathCorrector:
 
         # 7) 从候选中选出与 O2 在 AB 的异侧点
         candidates = [(x_a, y_a), (x_b, y_b)]
-        x_O3 = y_O3 = None
+        valid_candidates = []
         for xc, yc in candidates:
             sign_c = a_ab * xc + b_ab * yc + c_ab
             if sign_O2 * sign_c < 0:
-                x_O3, y_O3 = xc, yc
-                break
-        if x_O3 is None:
-            x_O3, y_O3 = candidates[1]  # 兜底
+                valid_candidates.append((xc, yc))
+
+        if not valid_candidates:
+            # 无法找到异侧点，沿O2圆弧走到BC段上的最近点
+            X_fallback = Point(-1,-1)
+            return O2_center, X_fallback  # 直接使用O2作为圆心，X_fallback本来应该为BC段上的切入点
+            # 这里不方便调_compute_fallback_X()，所以返回_apply_correction()计算X_fallback
+        else:
+            x_O3, y_O3 = valid_candidates[0]
 
         O3_center = Point(x_O3, y_O3)
 
@@ -206,8 +312,31 @@ class PathCorrector:
             if 0 <= t <= 1:
                 X_candidates.append(Point(xX, yX))
         if not X_candidates:
-            raise ValueError("No valid X on AB segment")
+            # raise ValueError("No valid X on AB segment")
+            # X  = O3_center
+            print("No intersection between O3 and AB")
+            X_candidates.append(O3_center)
         return O3_center, X_candidates[0]
+
+    def _calculate_beta(self, robot, segment_start, segment_end):
+        """公式3实现：计算前进方向与目标路径夹角β"""
+        x1 = segment_start.x
+        y1 = segment_start.y
+        x2 = segment_end.x
+        y2 = segment_end.y
+
+        # 计算路径方向角
+        dx_segment = x2 - x1
+        dy_segment = y2 - y1
+        # 计算路径方向角θ（相对于x轴正方向的弧度）
+        theta_rad = math.atan2(dy_segment, dx_segment) if (dy_segment, dx_segment) != (0, 0) else 0.0  # 修正点：交换dx和dy顺序
+
+        # β =  θ - α/a
+        beta_rad = theta_rad - robot.heading_angle
+
+        # 规范化到[-π, π]
+        beta_rad = (beta_rad + math.pi) % (2 * math.pi) - math.pi
+        return beta_rad
 
 
     def compute_circle_tangent_point(self, O2_center, O3_center, R):
@@ -224,7 +353,7 @@ class PathCorrector:
         ux, uy = dx / dist, dy / dist
         return Point(x1 + R * ux, y1 + R * uy)
 
-    def compute_blend_start(self, A: Point, B: Point, C: Point, R: float) -> Point:
+    def compute_blend_start(self, A: Point, B: Point, C: Point, R: float, pass_N:bool) -> tuple[Point, Point]:
         """
         计算预期转向点 N
         """
@@ -242,86 +371,102 @@ class PathCorrector:
         def cross(u, v):
             return np.float64(u[0] * v[1] - u[1] * v[0])
 
+        # 计算AB段向量u1、计算BC段向量u2
         u1 = to_vec(A,B); L1=norm(u1); u1=(u1[0]/L1,u1[1]/L1)
         u2 = to_vec(B,C); L2=norm(u2); u2=(u2[0]/L2,u2[1]/L2)
+
+        # 计算单位向量u1、u2的法向量，并根据点积调整方向
         n1 = (-u1[1],u1[0]);
         if dot(n1,to_vec(B,C))<0: n1=(-n1[0],-n1[1])
         n2 = (-u2[1],u2[0]);
         if dot(n2,to_vec(B,A))<0: n2=(-n2[0],-n2[1])
+
+        # 计算A、B点沿法线方向移动R距离得到的P1和P2
         P1 = add((A.x,A.y), scale(n1,R))
         P2 = add((B.x,B.y), scale(n2,R))
+
+        # 计算交点O_bleng
         denom = cross(u1,u2)
-        if abs(denom)<1e-9: raise ValueError("Parallel")
+        if abs(denom)<1e-9:
+            return B,B
         t1=cross((P2[0]-P1[0],P2[1]-P1[1]),u2)/denom
         O_blend=(P1[0]+t1*u1[0],P1[1]+t1*u1[1])
+        O_temp = Point(P1[0]+t1*u1[0],P1[1]+t1*u1[1])
+
+        # 计算点N
         w=(A.x-O_blend[0],A.y-O_blend[1])
         a=dot(u1,u1); b=2*dot(u1,w); c=dot(w,w)-R*R
         disc=b*b-4*a*c
-        if disc<0: raise ValueError("No N")
-        sd=math.sqrt(disc)
+        eps = 1e-8
+        # 检查是否有解
+        if disc < -eps:
+            raise ValueError("No N")
+        # 将微小负值裁剪为 0
+        disc = max(disc, 0.0)
+        # 计算解s1，s2
+        sd = math.sqrt(disc)
         s1=(-b+sd)/(2*a); s2=(-b-sd)/(2*a)
         cands=[]
-        for s in (s1,s2):
-            if 0<=s<=L1:
-                cands.append((A.x+s*u1[0],A.y+s*u1[1]))
-        if not cands: raise ValueError("No N on AB")
-        def dist2(p,Q): return (p[0]-Q.x)**2+(p[1]-Q.y)**2
-        N=max(cands,key=lambda p:dist2(p,B))
-        return Point(*N)
+        if(pass_N == False):
+            for s in (s1,s2):
+                if 0<=s<=L1 or abs(s)<1e-8:
+                    cands.append((A.x+s*u1[0],A.y+s*u1[1]))
+            # 检查是否有候选点
+            if not cands: raise ValueError("No N on AB")
+            def dist2(p,Q): return (p[0]-Q.x)**2+(p[1]-Q.y)**2
+            # 根据距离选择点N
+            N=max(cands,key=lambda p:dist2(p,B))
+            return Point(*N), O_temp
+        return O_temp,O_temp
 
-    def compute_blend_center(self, A: Point, B: Point, C: Point, R: float) -> Point:
-        """
-        计算平滑转弯圆心 O4
-        """
-        # 复用 compute_blend_start 求 O_blend
-        # 直接 compute offset lines intersection
-        # 确保所有计算使用 numpy.float64
-        def to_vec(P, Q):
-            return np.float64(Q.x - P.x), np.float64(Q.y - P.y)
-        def norm(v):
-            return np.hypot(np.float64(v[0]), np.float64(v[1]))
-        def scale(v, s):
-            return np.float64(v[0] * s), np.float64(v[1] * s)
-        def add(u, v):
-            return np.float64(u[0] + v[0]), np.float64(u[1] + v[1])
-        def dot(u, v):
-            return np.float64(u[0] * v[0] + u[1] * v[1])
-        def cross(u, v):
-            return np.float64(u[0] * v[1] - u[1] * v[0])
 
-        u1=to_vec(A,B);L1=norm(u1);u1=(u1[0]/L1,u1[1]/L1)
-        u2=to_vec(B,C);L2=norm(u2);u2=(u2[0]/L2,u2[1]/L2)
-        n1=(-u1[1],u1[0]);
-        if dot(n1,to_vec(B,C))<0:n1=(-n1[0],-n1[1])
-        n2=(-u2[1],u2[0]);
-        if dot(n2,to_vec(B,A))<0:n2=(-n2[0],-n2[1])
-        P1=add((A.x,A.y),scale(n1,R))
-        P2=add((B.x,B.y),scale(n2,R))
-        denom=cross(u1,u2)
-        if abs(denom)<1e-9:raise ValueError("Parallel")
-        t1=cross((P2[0]-P1[0],P2[1]-P1[1]),u2)/denom
-        O_blend=(P1[0]+t1*u1[0],P1[1]+t1*u1[1])
-        return Point(*O_blend)
+
 
     def generate_arc(self, center: Point, R: float,
                      start_pt: Point, end_pt: Point,
-                     num_points: int = 16):
+                     turn_direction: str,
+                     num_points: int = 16,):
         """
         生成圆弧点
+        :param center: 圆心
+        :param radius: 半径
+        :param start_pt: 圆弧起点
+        :param end_pt: 圆弧终点
+        :param turn_direction: "left" 或 "right"
+        :param num_points: 插值点数
         """
-        theta_start = np.arctan2(np.float64(start_pt.y - center.y),
-                                 np.float64(start_pt.x - center.x))
-        theta_end = np.arctan2(np.float64(end_pt.y - center.y),
-                               np.float64(end_pt.x - center.x))
+        # 1) 计算起始和结束的极角
+        theta_start = math.atan2(start_pt.y - center.y, start_pt.x - center.x)
+        theta_end = math.atan2(end_pt.y - center.y, end_pt.x - center.x)
 
-        if theta_end < theta_start:
-            theta_end += 2 * math.pi
+        # 2) 按照转向方向，规范化 delta_theta 到最小弧度
+        delta_theta = theta_end - theta_start
+        if turn_direction == "left":
+            # 想要 delta_theta ≥ 0，若 < 0 就加 2π
+            if delta_theta < 0:
+                delta_theta += 2 * math.pi
+        elif turn_direction == "right":
+            # 想要 delta_theta ≤ 0，若 > 0 就减 2π
+            if delta_theta > 0:
+                delta_theta -= 2 * math.pi
+        else:
+            raise ValueError(f"Unknown turn_direction: {turn_direction!r}")
 
-        thetas = np.linspace(theta_start, theta_end, num=num_points)
-        # math.cos可以替换成np.cos
-        return [Point(center.x + R * math.cos(t),
-                      center.y + R * math.sin(t))
-                for t in thetas]
+        # 3) 在 [theta_start, theta_start + delta_theta] 上等距插值
+        thetas = np.linspace(theta_start, theta_start + delta_theta, num=num_points)
+
+        # 4) 生成并可视化
+        arc_pts = []
+        for t in thetas:
+            p = Point(
+                center.x + R * math.cos(t),
+                center.y + R * math.sin(t)
+            )
+            arc_pts.append(p)
+            # # 可视化测试（如果需要实时展示）
+            # self._visualize_arc(custom_map, guide_path, optimized_path, arc_pts, '测试圆弧点')
+
+        return arc_pts
 
     def generate_line(self, p1: Point, p2: Point,
                       num_points: int = 16):
@@ -332,6 +477,183 @@ class PathCorrector:
         return [Point(p1.x + (p2.x - p1.x) * t,
                       p1.y + (p2.y - p1.y) * t)
                 for t in np.linspace(0, 1, num_points)]
+
+    def _compute_fallback_X(self, O2_center: Point, R: float, A: Point, B: Point, C:Point) -> Point:
+        """沿圆 O2 找到 AB 上的切入点 X，并保证切线方向与 BC 对齐"""
+        x_O2, y_O2 = O2_center.x, O2_center.y
+        dx_ab = B.x - A.x
+        dy_ab = B.y - A.y
+        # 直线 BC 方向单位向量
+        if B.x != C.x or B.y != C.y:
+            v_bc = (C.x - B.x, C.y - B.y)
+            len_bc = math.hypot(v_bc[0], v_bc[1])
+            v_bc = (v_bc[0]/len_bc, v_bc[1]/len_bc)
+
+        # 求圆与 AB 的交点
+        candidates = []
+        if abs(dx_ab) > 1e-6:
+            k_ab = dy_ab / dx_ab
+            A_quad = 1 + k_ab**2
+            B_quad = -2*x_O2 + 2*k_ab*(A.y - y_O2 - k_ab*A.x)
+            C_quad = x_O2**2 + (A.y - y_O2 - k_ab*A.x)**2 - R**2
+            disc = B_quad**2 - 4*A_quad*C_quad
+            if disc < 0:
+                raise ValueError("无法找到备用切入点")
+            sqrt_d = math.sqrt(disc)
+            for sign in (+1, -1):
+                x = (-B_quad + sign*sqrt_d) / (2*A_quad)
+                y = k_ab * (x - A.x) + A.y
+                candidates.append((x,y))
+        else:
+            # 垂直线 x = A.x
+            x = A.x
+            d = R**2 - (x - x_O2)**2
+            if d < 0:
+                raise ValueError("无法找到备用切入点")
+            for sign in (+1, -1):
+                y = y_O2 + sign * math.sqrt(d)
+                candidates.append((x,y))
+
+        if B.x != C.x or B.y != C.y:
+            # 计算切线方向并选出与 BC 方向最匹配的点
+            best = None
+            best_dot = -2.0
+            for x,y in candidates:
+                # 切线方向垂直于半径 (x-x_O2, y-y_O2)
+                rx, ry = x - x_O2, y - y_O2
+                # 切线向量可取 (-ry, rx)
+                tx, ty = -ry, rx
+                norm_t = math.hypot(tx, ty)
+                tx, ty = tx/norm_t, ty/norm_t
+                dot = tx*v_bc[0] + ty*v_bc[1]
+                if dot > best_dot:
+                    best_dot = dot
+                    best = (x, y)
+            return Point(*best)
+
+        return candidates[0]
+
+
+
+    def generate_blend_arc(self,
+                           center: Point,
+                           R: float,
+                           P1: Point,
+                           P2: Point,
+                           turn_direction: str,
+                           num_points: int = 20
+    ) -> List[Point]:
+        """
+        以 center, R, start=P1, end=P2, direction 生成圆弧插值点。
+        turn_direction: "left" 或 "right"
+        """
+        theta1 = math.atan2(P1.y - center.y, P1.x - center.x)
+        theta2 = math.atan2(P2.y - center.y, P2.x - center.x)
+        # 计算叉积 (B–A)x(C–B) 来决定角度增减也可，这里用传入的 turn_direction
+        if turn_direction == "left":
+            if theta2 < theta1:
+                theta2 += 2 * math.pi
+        else:  # right
+            if theta2 > theta1:
+                theta2 -= 2 * math.pi
+
+        thetas = np.linspace(theta1, theta2, num_points)
+        return [Point(center.x + R * math.cos(t),
+                      center.y + R * math.sin(t))
+                for t in thetas]
+
+    def check_collision_segment(self, segment_pts, custom_map):
+        """
+        检测给定的一段路径（点列表）是否与障碍物碰撞。
+        :param segment_pts: List[Point]，一系列离散采样的路径点
+        :param custom_map: 2D numpy array or list of lists，0: 障碍, 1: 可行驶
+        :return: True 如果有任意一点落入障碍区；False 全部安全
+        """
+        h = len(custom_map)
+        w = len(custom_map[0]) if h > 0 else 0
+
+        for pt in segment_pts:
+            ix = int(round(pt.x))
+            iy = int(round(pt.y))
+            # 检查边界
+            if ix < 0 or ix >= w or iy < 0 or iy >= h:
+                # 出界也算碰撞
+                return True
+            if custom_map[iy][ix] == 1:
+                return True
+        return False
+
+    def _insert_midpoint_and_replan(self,
+                                    A: Point,
+                                    B: Point,
+                                    C: Point,
+                                    D: Point,
+                                    custom_map,
+                                    guide_path,
+                                    optimized_path
+    ) -> List[Point]:
+        """
+        A = Z（机器人当前位置）
+        B = segment_start
+        C = segment_end
+        D = segment_next_end
+        插入 B'，并分别对 A->B'、B'->C 用圆弧平滑。
+        """
+        R = self.turn_radius
+        num_angles = 16
+        sample_radius = 2 * R
+        h, w = len(custom_map), len(custom_map[0])
+
+        for theta in np.linspace(0, 2*math.pi, num_angles, endpoint=False):
+            bp_x = B.x + sample_radius * math.cos(theta)
+            bp_y = B.y + sample_radius * math.sin(theta)
+            ix, iy = int(round(bp_x)), int(round(bp_y))
+            if ix < 0 or ix >= w or iy < 0 or iy >= h or custom_map[iy][ix] == 1:
+                continue
+            Bp = Point(bp_x, bp_y)
+
+            #—— 1) 先做粗线碰撞检测
+            if self.check_collision_segment(self.generate_line(A, Bp), custom_map): continue
+            if self.check_collision_segment(self.generate_line(Bp, C), custom_map): continue
+
+            self._visualize_centers(custom_map, guide_path, optimized_path,
+                                    [A, B, Bp, C],
+                                    ['A', 'B', 'Bp', 'C'])
+
+            #—— 2) 计算 A->Bp 段的圆弧
+            # 切点 N1、圆心 O
+            N1, O1 = self.compute_blend_start(A, B, Bp, R, False)
+            N2, O1= self.compute_blend_start(Bp, B, A, R, False)
+            # 根据 ABp 转向方向
+            cross1 = ((B.x - A.x)*(Bp.y - B.y) - (B.y - A.y)*(Bp.x - B.x))
+            dir1 = "left" if cross1 > 0 else "right"
+            arc1 = self.generate_blend_arc(O1, R, N1, N2, dir1)
+            line1 = self.generate_line(A, N1)
+
+            self._visualize_centers(custom_map, guide_path, optimized_path,
+                                    [N1, O1, N2],
+                                    ['N1', 'O1', 'N2'])
+            self._visualize_line(custom_map, guide_path, optimized_path, line1, 'Line: Z->N1')
+            self._visualize_arc(custom_map, guide_path, optimized_path, arc1, 'Arc: N1->N2')
+
+            #—— 3) 计算 Bp->C 段的圆弧
+            N3, O2 = self.compute_blend_start(B, Bp, C, R, False)
+            N4, O2 = self.compute_blend_start(C, Bp, B, R, False)
+            cross2 = ((Bp.x - B.x)*(C.y - B.y) - (Bp.y - B.y)*(C.x - B.x))
+            dir2 = "left" if cross2 > 0 else "right"
+            arc2 = self.generate_blend_arc(O2, R, N3, N4, dir2)
+
+            self._visualize_centers(custom_map, guide_path, optimized_path,
+                                    [N3, O2, N4],
+                                    ['N3', 'O2', 'N4'])
+            self._visualize_arc(custom_map, guide_path, optimized_path, arc2, 'Arc: N3->N4')
+
+            return line1 + arc1 + arc2
+
+        # 全部采样失败
+        return []
+
+
 
     def _visualize_centers(self, game_map, guide_path, optimized_path, centers, labels):
         # ========================== 画布初始化 ==========================
@@ -360,7 +682,7 @@ class PathCorrector:
 
         # ---- 优化路径（蓝色实线 + 动态点）----
         if opt_x and opt_y:
-            ax.plot(opt_x, opt_y, 'b-', linewidth=2, alpha=0.8,
+            ax.plot(opt_x, opt_y, 'b--', linewidth=2, alpha=0.8,
                     label=f"优化路径 (节点数:{len(optimized_path)})")
             # 动态点标注（最后一个点为机器人当前位置）
             ax.scatter(opt_x, opt_y, s=15, c='cyan', marker='o',
@@ -421,7 +743,7 @@ class PathCorrector:
 
         # ---- 优化路径（蓝色实线 + 动态点）----
         if opt_x and opt_y:
-            ax.plot(opt_x, opt_y, 'b-', linewidth=2, alpha=0.8,
+            ax.plot(opt_x, opt_y, 'b--', linewidth=2, alpha=0.8,
                     label=f"优化路径 (节点数:{len(optimized_path)})")
             # 动态点标注（最后一个点为机器人当前位置）
             ax.scatter(opt_x, opt_y, s=15, c='cyan', marker='o',
@@ -429,8 +751,9 @@ class PathCorrector:
 
         xs = [p.x for p in arc_pts]
         ys = [p.y for p in arc_pts]
-        ax.plot(xs, ys, 'g-', linewidth=2, label=title)
-        ax.scatter(xs, ys, s=30, c='cyan', marker='o', edgecolors='k')
+        ax.plot(xs, ys, 'b--', linewidth=2, label=title)
+        ax.scatter(xs, ys, s=15, c='cyan', marker='o', edgecolors='k')
+
         # ==================== 起点终点标记层 ======================
         if guide_path:
             all_paths = [p for p in [guide_path] if p]
@@ -483,7 +806,7 @@ class PathCorrector:
 
         # ---- 优化路径（蓝色实线 + 动态点）----
         if opt_x and opt_y:
-            ax.plot(opt_x, opt_y, 'b-', linewidth=2, alpha=0.8,
+            ax.plot(opt_x, opt_y, 'b--', linewidth=2, alpha=0.8,
                     label=f"优化路径 (节点数:{len(optimized_path)})")
             # 动态点标注（最后一个点为机器人当前位置）
             ax.scatter(opt_x, opt_y, s=15, c='cyan', marker='o',
@@ -491,8 +814,8 @@ class PathCorrector:
 
         xs = [p.x for p in line_pts]
         ys = [p.y for p in line_pts]
-        ax.plot(xs, ys, 'g-', linewidth=2, label=title)
-        ax.scatter(xs, ys, s=30, c='lime', marker='o', edgecolors='k')
+        ax.plot(xs, ys, 'b--', linewidth=2, label=title)
+        ax.scatter(xs, ys, s=15, c='lime', marker='o', edgecolors='k')
         # ==================== 起点终点标记层 ======================
         if guide_path:
             all_paths = [p for p in [guide_path] if p]
@@ -518,3 +841,93 @@ class PathCorrector:
         plt.tight_layout()
         plt.show()
 
+    def _visualize_parallel_line(self,
+                        game_map,
+                        guide_path,
+                        optimized_path,
+                        line_pts,
+                        title,
+                        L_k=None,
+                        L_b=None,
+                        L_x_const=None,
+                        circle_center=None,
+                        circle_radius=None):
+        """
+        扩展后的可视化函数：
+        - line_pts: 原有插值点列表
+        - title: 直线段标题
+        - L_k, L_b: 平移直线 L 的斜率和截距
+        - L_x_const: 垂直直线 L 的 x 常数（当直线 L 垂直时）
+        - circle_center, circle_radius: 圆 O2 的圆心和半径
+        """
+        # 画布初始化
+        fig, ax = plt.subplots(figsize=(12, 10))
+        plt.rcParams['font.sans-serif'] = 'SimHei'
+
+        # 障碍物地图
+        ax.imshow(game_map,
+                  cmap="binary",
+                  origin="lower",
+                  extent=[0, game_map.shape[1], 0, game_map.shape[0]])
+
+        # 路径数据预处理
+        def get_path_coords(path):
+            return ([p.x for p in path], [p.y for p in path]) if path else (None, None)
+
+        guide_x, guide_y = get_path_coords(guide_path)
+        opt_x, opt_y = get_path_coords(optimized_path)
+
+        # 引导路径
+        if guide_x and guide_y:
+            ax.plot(guide_x, guide_y, 'g-.', linewidth=2, label=f"引导路径 ({len(guide_path)})")
+            ax.scatter(guide_x, guide_y, s=20, c='green', marker='x')
+
+        # 优化路径
+        if opt_x and opt_y:
+            ax.plot(opt_x, opt_y, 'b--', linewidth=2, alpha=0.8, label=f"优化路径 ({len(optimized_path)})")
+            ax.scatter(opt_x, opt_y, s=15, c='cyan', marker='o', edgecolors='k')
+
+        # 原有插值线（Z->H / H->X / X->N）
+        if line_pts:
+            xs = [p.x for p in line_pts]
+            ys = [p.y for p in line_pts]
+            ax.plot(xs, ys, 'lime', linewidth=2, label=title)
+
+        # 平移直线 L
+        if L_k is not None and L_b is not None:
+            x_vals = np.array([0, game_map.shape[1]])
+            y_vals = L_k * x_vals + L_b
+            ax.plot(x_vals, y_vals, 'm--', linewidth=2, label='平移直线 L')
+        elif L_x_const is not None:
+            ax.axvline(L_x_const, color='m', linestyle='--', linewidth=2, label='平移直线 L')
+
+        # 圆 O2
+        if circle_center is not None and circle_radius is not None:
+            from matplotlib.patches import Circle
+            circ = Circle((circle_center.x, circle_center.y),
+                          circle_radius,
+                          fill=False,
+                          edgecolor='orange',
+                          linewidth=2,
+                          label='圆 O2')
+            ax.add_patch(circ)
+
+        # 起点/终点
+        if guide_path:
+            start = guide_path[0]
+            goal = guide_path[-1]
+            ax.scatter(start.x, start.y, c='lime', s=200, marker='P', edgecolors='k', label='起点')
+            ax.scatter(goal.x, goal.y, c='gold', s=200, marker='*', edgecolors='k', label='终点')
+
+        # 坐标轴、图例
+        ax.set_xlim(0, game_map.shape[1])
+        ax.set_ylim(0, game_map.shape[0])
+        ax.set_aspect('equal')
+        ax.grid(True, linestyle=':', color='gray', alpha=0.4)
+        ax.set_xlabel("X 坐标", fontsize=12)
+        ax.set_ylabel("Y 坐标", fontsize=12)
+        ax.set_title("路径规划效果对比: 引导路径 → 优化路径", fontsize=14, pad=15)
+        ax.legend(loc='upper right')
+
+        plt.tight_layout()
+        plt.show()
