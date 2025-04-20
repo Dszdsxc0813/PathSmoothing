@@ -16,9 +16,9 @@ if __name__ == "__main__":
     print(f"成功生成 {len(points)} 个离散点")
     print("生成点坐标:")
     for index, p in enumerate(points):
-        if 50 < p.y:
+        if 25 < p.y:
             print(f"索引: {index}, 坐标: ({p.x}, {p.y})")
-        if 80 < p.x  and p.x >70:
+        if 40 < p.x  and p.x >30:
             print(f"索引: {index}, 坐标: ({p.x}, {p.y})")
 
     # 构建离散图
@@ -30,12 +30,13 @@ if __name__ == "__main__":
         print(f"  -> {neighbor.wkt} (距离: {dist:.2f})")
 
     # 随机选择起点终点
-    start = points[34]
-    goal = points[126]
+    start = Point(86,54)
+    goal = Point(34,21)
+    # goal  = Point(31,43) 成功
 
-    # 可视化完整地图
-    visualize_discrete_points(custom_map, points)
-    visualize_graph(custom_map, graph, points, start, goal)
+    # 可视化完整离散点及其之间的连接
+    visualize_discrete_structure(custom_map, points, None, None, None)
+    visualize_discrete_structure(custom_map, points, graph, start, goal)
 
     # 路径规划与优化
     planner = PathPlanner(graph, custom_map)
@@ -54,7 +55,7 @@ if __name__ == "__main__":
     # 初始化优化器（turn_radius与离散点间距一致）
     smoother = PathSmoother(game_map=custom_map, turn_radius=MIN_TURN_R)
     # 执行优化
-    smooth_path = smoother.smooth_path(guide_path,visualize_step=True)
+    smooth_path = smoother.smooth_path(raw_path, guide_path, visualize_step=True)
 
     # 可视化对比
     PathSmoother.visualize_comparison(raw_path, guide_path, smooth_path, custom_map)
