@@ -735,7 +735,6 @@ class PathSmoother:
         ax.set_ylabel("Y 坐标", fontsize=12)
         ax.set_title("路径规划效果对比: 原始路径 → 引导路径 → 优化路径)", fontsize=14, pad=15)
         ax.legend(loc='upper right', fontsize=10)
-
         plt.tight_layout()
         plt.show()
 
