@@ -1,5 +1,6 @@
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
 
 @dataclass
 class Point:
@@ -8,6 +9,7 @@ class Point:
 
 @dataclass
 class RobotState:
-    current_pos: Point       # 当前坐标 (x0, y0)
-    current_segment_idx: int # 当前所在路径段的索引（路径段为 path[i] -> path[i+1]）
-    heading_angle: float     # 当前朝向角α（相对于y轴正方向的弧度）
+    current_pos: Point            # 当前重心坐标
+    current_segment_idx: int      # 当前所在路径段索引
+    heading_angle: float          # 朝向（相对于 x 轴正向的弧度）
+
