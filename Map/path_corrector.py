@@ -1,5 +1,6 @@
 import math
 from typing import List
+from utils import *
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -85,7 +86,7 @@ class PathCorrector:
             # ------------------------- 碰撞检测 -------------------------
             all_segments = [arc1, line1]
             for seg in all_segments:
-                if self.check_collision_segment(seg, custom_map):
+                if self.check_collision_robot(robot, custom_map):
                     # 触发路径调整逻辑（例如插入中间节点或退回原始路径）
                     print("路径段碰撞障碍物！")
                     # 发现碰撞，不直接放弃
@@ -135,7 +136,7 @@ class PathCorrector:
             # ------------------------- 碰撞检测 -------------------------
             all_segments = [arc1, arc2]
             for seg in all_segments:
-                if self.check_collision_segment(seg, custom_map):
+                if self.check_collision_robot(robot, custom_map):
                     # 触发路径调整逻辑（例如插入中间节点或退回原始路径）
                     print("路径段碰撞障碍物！")
                     return self._insert_midpoint_and_replan(
@@ -159,7 +160,7 @@ class PathCorrector:
         # ------------------------- 碰撞检测 -------------------------
         all_segments = [arc1, arc2, line1]
         for seg in all_segments:
-            if self.check_collision_segment(seg, custom_map):
+            if self.check_collision_robot(robot, custom_map):
                 # 触发路径调整逻辑（例如插入中间节点或退回原始路径）
                 print("路径段碰撞障碍物！")
                 # 发现碰撞，不直接放弃，尝试插入中间节点重规划
@@ -533,6 +534,59 @@ class PathCorrector:
 
         return candidates[0]
 
+
+    def check_collision_robot(self,
+                              robot: RobotState,
+                              custom_map: List[List[int]],
+                              samples_per_edge: int = 10) -> bool:
+        """
+        检测 RobotState.inflate_hull 构成的五边形（世界坐标）是否与障碍物碰撞。
+        :param robot: 已初始化好 inflate_hull（本地坐标）的 RobotState
+        :param custom_map: h×w 二维网格，0=障碍，1=可行
+        :param samples_per_edge: 每条边离散采样点数
+        :return: True=有碰撞，False=完全安全
+        """
+        h = len(custom_map)
+        w = len(custom_map[0]) if h > 0 else 0
+
+        # 1) 把本地 inflate_hull 顶点 变换到世界坐标
+        local_centroid = robot.compute_centroid(robot.inflate_hull)
+        ca = math.cos(robot.heading_angle)
+        sa = math.sin(robot.heading_angle)
+
+        world_hull = []
+        for p in robot.inflate_hull:
+            # 去重心 → 旋转 → 平移
+            rx = p.x - local_centroid.x
+            ry = p.y - local_centroid.y
+            xw = robot.current_pos.x + (rx * ca - ry * sa)
+            yw = robot.current_pos.y + (rx * sa + ry * ca)
+            world_hull.append(Point(xw, yw))
+            visualize_convex_hulls(local_hull=world_hull, world_hull=world_hull)
+
+        # 2) 遍历每条边，并离散采样
+        n = len(world_hull)
+        for i in range(n):
+            p1 = world_hull[i]
+            p2 = world_hull[(i + 1) % n]
+
+            # 在 [0,1] 上等间距采样
+            for t in np.linspace(0.0, 1.0, samples_per_edge):
+                x = p1.x + (p2.x - p1.x) * t
+                y = p1.y + (p2.y - p1.y) * t
+                ix = int(round(x))
+                iy = int(round(y))
+
+                # 边界判断
+                if ix < 0 or ix >= w or iy < 0 or iy >= h:
+                    return True
+
+                # 地图值为 0 表示障碍
+                if custom_map[iy][ix] == 1:
+                    return True
+
+        # 所有采样点均安全
+        return False
 
 
     def generate_blend_arc(self,
