@@ -213,38 +213,107 @@ def visualize_dynamic_paths(guide_path, optimized_path, game_map):
     plt.tight_layout()
     plt.show()
 
-    def visualize_convex_hulls(convex_hull: list[Point], expanded_hull: list[Point]):
-        """
-        可视化凸壳模型及其扩张后的结果。
+def visualize_convex_hulls(convex_hull: list[Point], expanded_hull: list[Point]):
+    """
+    可视化凸壳模型及其扩张后的结果。
+    Args:
+    convex_hull: 原始凸壳模型的顶点列表。
+    expanded_hull: 扩张后的凸壳模型的顶点列表。
+    """
+    # 提取原始凸壳的坐标
+    original_x = [p.x for p in convex_hull]
+    original_y = [p.y for p in convex_hull]
+    original_x.append(original_x[0])  # 闭合多边形
+    original_y.append(original_y[0])
 
-        Args:
-            convex_hull: 原始凸壳模型的顶点列表。
-            expanded_hull: 扩张后的凸壳模型的顶点列表。
-        """
-        # 提取原始凸壳的坐标
-        original_x = [p.x for p in convex_hull]
-        original_y = [p.y for p in convex_hull]
-        original_x.append(original_x[0])  # 闭合多边形
-        original_y.append(original_y[0])
+    # 提取扩张后的凸壳的坐标
+    expanded_x = [p.x for p in expanded_hull]
+    expanded_y = [p.y for p in expanded_hull]
+    expanded_x.append(expanded_x[0])  # 闭合多边形
+    expanded_y.append(expanded_y[0])
 
-        # 提取扩张后的凸壳的坐标
-        expanded_x = [p.x for p in expanded_hull]
-        expanded_y = [p.y for p in expanded_hull]
-        expanded_x.append(expanded_x[0])  # 闭合多边形
-        expanded_y.append(expanded_y[0])
+    # 创建图形
+    plt.figure(figsize=(10, 10))
+    plt.plot(original_x, original_y, 'b-', label='Original Convex Hull')
+    plt.plot(expanded_x, expanded_y, 'r-', label='Expanded Convex Hull')
+    plt.scatter([p.x for p in convex_hull], [p.y for p in convex_hull], c='blue', marker='o',
+                label='Original Vertices')
+    plt.scatter([p.x for p in expanded_hull], [p.y for p in expanded_hull], c='red', marker='x',
+                label='Expanded Vertices')
+    plt.xlabel('X')
+    plt.ylabel('Y')
+    plt.title('Convex Hull Expansion Visualization')
+    plt.legend()
+    plt.grid(True)
+    plt.axis('equal')
+    plt.show()
 
-        # 创建图形
-        plt.figure(figsize=(10, 10))
-        plt.plot(original_x, original_y, 'b-', label='Original Convex Hull')
-        plt.plot(expanded_x, expanded_y, 'r-', label='Expanded Convex Hull')
-        plt.scatter([p.x for p in convex_hull], [p.y for p in convex_hull], c='blue', marker='o',
-                    label='Original Vertices')
-        plt.scatter([p.x for p in expanded_hull], [p.y for p in expanded_hull], c='red', marker='x',
-                    label='Expanded Vertices')
-        plt.xlabel('X')
-        plt.ylabel('Y')
-        plt.title('Convex Hull Expansion Visualization')
-        plt.legend()
-        plt.grid(True)
-        plt.axis('equal')
-        plt.show()
+
+def visualize_paths_with_robot(
+    raw_path,
+    guide_path,
+    game_map,
+    robot,
+    samples_per_edge=10
+):
+    """
+    将三种路径可视化与机器人模型（一原始凸壳 + 一膨胀凸壳）叠加在地图上。
+    """
+    # 画布与障碍物
+    fig, ax = plt.subplots(figsize=(12, 10))
+    ax.imshow(game_map, cmap="binary", origin="lower",
+              extent=[0, game_map.shape[1], 0, game_map.shape[0]])
+
+    # 辅助函数：提取坐标
+    def get_coords(path):
+        return ([p.x for p in path], [p.y for p in path]) if path else (None, None)
+
+    raw_x, raw_y = get_coords(raw_path)
+    guide_x, guide_y = get_coords(guide_path)
+
+    # 原始路径
+    if raw_x and raw_y:
+        ax.plot(raw_x, raw_y, 'r--', linewidth=1.5, alpha=0.7, label=f"原始路径 ({len(raw_path)} pts)")
+        ax.scatter(raw_x, raw_y, s=20, c='red', marker='o')
+
+    # 引导路径
+    if guide_x and guide_y:
+        ax.plot(guide_x, guide_y, 'g-.', linewidth=2, markersize=6, label=f"引导路径 ({len(guide_path)} pts)")
+        ax.scatter(guide_x, guide_y, s=20, c='green', marker='x')
+
+    # 机器人原始凸壳（世界坐标）
+    orig_hull = robot.get_convex_hull()
+    ox = [p.x for p in orig_hull] + [orig_hull[0].x]
+    oy = [p.y for p in orig_hull] + [orig_hull[0].y]
+    ax.plot(ox, oy, 'b-', linewidth=1, label="舰载机原始模型")
+
+    # 机器人膨胀凸壳（世界坐标）
+    inflated_local = robot.inflate_hull
+    lc = robot.compute_centroid(inflated_local)
+    ca, sa = math.cos(robot.heading_angle), math.sin(robot.heading_angle)
+    world_inflated = []
+    for p in inflated_local:
+        rx, ry = p.x - lc.x, p.y - lc.y
+        xw = robot.current_pos.x + (rx * ca - ry * sa)
+        yw = robot.current_pos.y + (rx * sa + ry * ca)
+        world_inflated.append(type(p)(xw, yw))  # 使用相同的Point构造函数
+
+    ex = [p.x for p in world_inflated] + [world_inflated[0].x]
+    ey = [p.y for p in world_inflated] + [world_inflated[0].y]
+    ax.plot(ex, ey, 'r-', linewidth=1, label="舰载机膨胀模型")
+
+    # 散点标注
+    ax.scatter([p.x for p in orig_hull], [p.y for p in orig_hull],
+               c='blue', marker='o', s=10)
+    ax.scatter([p.x for p in world_inflated], [p.y for p in world_inflated],
+               c='red', marker='x', s=10)
+
+    ax.set_xlim(0, game_map.shape[1])
+    ax.set_ylim(0, game_map.shape[0])
+    ax.set_aspect('equal')
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.grid(True, linestyle=':', color='gray', alpha=0.4)
+    ax.legend(loc='upper left')
+    plt.tight_layout()
+    plt.show()
