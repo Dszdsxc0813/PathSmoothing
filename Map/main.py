@@ -33,9 +33,9 @@ if __name__ == "__main__":
     start = points[34]
     goal = points[126]
 
-    # 可视化完整地图
-    visualize_discrete_points(custom_map, points)
-    visualize_graph(custom_map, graph, points, start, goal)
+    # 可视化完整离散点及其之间的连接
+    visualize_discrete_structure(custom_map, points, None, None, None)
+    visualize_discrete_structure(custom_map, points, graph, start, goal)
 
     # 路径规划与优化
     planner = PathPlanner(graph, custom_map)
@@ -45,7 +45,7 @@ if __name__ == "__main__":
         print(f"索引: {index}, 坐标: ({i.x}, {i.y})")
     guide_path = planner.optimize_path(raw_path)
     # 可视化
-    if raw_path :
+    if raw_path:
         visualize_paths(raw_path, guide_path, custom_map)
     else:
         print("路径规划失败！")
@@ -54,7 +54,7 @@ if __name__ == "__main__":
     # 初始化优化器（turn_radius与离散点间距一致）
     smoother = PathSmoother(game_map=custom_map, turn_radius=MIN_TURN_R)
     # 执行优化
-    smooth_path = smoother.smooth_path(guide_path,visualize_step=True)
+    smooth_path = smoother.smooth_path(raw_path, guide_path, visualize_step=True)
 
     # 可视化对比
     PathSmoother.visualize_comparison(raw_path, guide_path, smooth_path, custom_map)

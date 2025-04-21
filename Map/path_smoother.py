@@ -22,7 +22,7 @@ class PathSmoother:
         self.corrector = PathCorrector(self.turn_radius+self.safety_margin)
         self.optimized_path = []  # 新增优化路径存储
 
-    def smooth_path(self, guide_path, visualize_step):
+    def smooth_path(self, raw_path, guide_path, visualize_step):
         """
         主优化流程：模拟机器人沿路径动态移动并优化
         :param guide_path: 引导路径（Point对象列表）
