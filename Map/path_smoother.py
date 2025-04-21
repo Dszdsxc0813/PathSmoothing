@@ -22,7 +22,7 @@ class PathSmoother:
         self.corrector = PathCorrector(self.turn_radius+self.safety_margin)
         self.optimized_path = []  # 新增优化路径存储
 
-    def smooth_path(self, guide_path, visualize_step):
+    def smooth_path(self, raw_path, guide_path, visualize_step):
         """
         主优化流程：模拟机器人沿路径动态移动并优化
         :param guide_path: 引导路径（Point对象列表）
@@ -38,15 +38,22 @@ class PathSmoother:
             current_pos=Point(guide_path[0].x, guide_path[0].y),
             current_segment_idx=0,
             heading_angle=self._calculate_initial_heading(guide_path[0], guide_path[1]),
+            inflate_distance = 0.25
         )
+        print(robot.inflate_hull)  # 查看膨胀后的凸壳顶点
+        visualize_paths_with_robot(raw_path,guide_path,self.game_map, robot)
 
         # 测试！！
         # 随机取第0路径段旁的一个点
         start_point = Point(79,50)
         next_point = Point(75,58)
         robot.current_pos = Point(start_point.x, start_point.y)
-        robot.heading_angle = self._calculate_initial_heading(start_point, next_point)
+
+        heading = robot.compute_initial_heading_to_align_apex(start_point, next_point)
+        robot.heading_angle = heading
         turn_direction = "left"
+
+        visualize_paths_with_robot(raw_path, guide_path, self.game_map, robot)
 
         optimized_path = [robot.current_pos]
 
@@ -122,7 +129,8 @@ class PathSmoother:
                             )
                             for pt in fallback_line:
                                 # 在 optimized_path.append(next_point) 前添加碰撞检测
-                                if self.corrector.check_collision_segment([next_point], self.game_map):
+                                if self.corrector.check_collision_segment([next_point], self.game_map)\
+                                        or self.corrector.check_collision_robot(robot, self.game_map):
                                     print("前进方向碰撞障碍物，触发重规划！")
                                 optimized_path.append(pt)
                                 robot = self._update_robot_state(robot, pt, guide_path)
@@ -149,7 +157,8 @@ class PathSmoother:
                             )
                             for pt in arc_pts:
                                 # 在 optimized_path.append(next_point) 前添加碰撞检测
-                                if self.corrector.check_collision_segment([next_point], self.game_map):
+                                if self.corrector.check_collision_segment([next_point], self.game_map)\
+                                        or self.corrector.check_collision_robot(robot, self.game_map):
                                     print("前进方向碰撞障碍物，触发重规划！")
                                 optimized_path.append(pt)
                                 robot = self._update_robot_state(robot, pt, guide_path)
@@ -164,7 +173,8 @@ class PathSmoother:
                             break
 
                     # 在 optimized_path.append(next_point) 前添加碰撞检测
-                    if self.corrector.check_collision_segment([next_point], self.game_map):
+                    if self.corrector.check_collision_segment([next_point], self.game_map)\
+                            or self.corrector.check_collision_robot(robot, self.game_map):
                         print("前进方向碰撞障碍物，触发重规划！")
                         # 不能直接退出，不然就变成死循环了
                         break  # 退出当前循环，触发局部重规划
@@ -213,7 +223,8 @@ class PathSmoother:
                     for i, point in enumerate(corrected_points):
                         # 更新机器人到当前路径点
                         # 在 optimized_path.append(next_point) 前添加碰撞检测
-                        if self.corrector.check_collision_segment([next_point], self.game_map):
+                        if self.corrector.check_collision_segment([next_point], self.game_map)\
+                                or self.corrector.check_collision_robot(robot, self.game_map):
                             print("前进方向碰撞障碍物，触发重规划！")
                         optimized_path.append(point)
                         robot = self._update_robot_state(robot, point, guide_path)
@@ -554,6 +565,7 @@ class PathSmoother:
         )
 
 
+
     def _reached_segment_end(self, current_pos, segment_end):
         """到达判断逻辑（增加容差系数）"""
         dx = segment_end.x - current_pos.x
@@ -661,6 +673,8 @@ class PathSmoother:
             y = start.y + (end.y - start.y) * t
             points.append(Point(x, y))
         return points
+
+
 
     @staticmethod
     def visualize_comparison(raw_path, optimized_path, smooth_path, game_map):
