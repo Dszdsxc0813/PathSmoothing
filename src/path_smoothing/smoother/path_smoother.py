@@ -1,11 +1,9 @@
 # path_smoother.py
 import math
 import numpy as np
-import matplotlib.pyplot as plt
-from scipy.optimize import fsolve
 from path_corrector import *
-from robot_state import *
-from utils import *
+from src.path_smoothing.robot.robot_state import *
+from src.path_smoothing.utils.utils import *
 
 
 class PathSmoother:

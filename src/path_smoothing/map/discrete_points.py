@@ -1,10 +1,8 @@
 # discrete_points.py
-import numpy as np
 import random
 from shapely.geometry import Point
-from shapely.prepared import prep
-from config import MAP_WIDTH, MAP_HEIGHT
-from config import MIN_CONNECT_DIS
+from src.path_smoothing.config import MAP_WIDTH, MAP_HEIGHT
+from src.path_smoothing.config import MIN_CONNECT_DIS
 
 
 def generate_discrete_points(game_map, seed=None):

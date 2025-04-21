@@ -1,11 +1,11 @@
 # main.py
-from Map.discrete_graph import build_discrete_graph
-from map_generator import *
-from discrete_points import *
-from utils import *
-from path_planner import *
-from path_smoother import PathSmoother
-from config import  *
+from src.path_smoothing.map.discrete_graph import build_discrete_graph
+from src.path_smoothing.map.map_generator import *
+from src.path_smoothing.map.discrete_points import *
+from src.path_smoothing.utils.utils import *
+from src.path_smoothing.planner.path_planner import *
+from src.path_smoothing.smoother.path_smoother import PathSmoother
+from src.path_smoothing.config import  *
 
 if __name__ == "__main__":
     # 生成50x30的地图（约1500单元格）

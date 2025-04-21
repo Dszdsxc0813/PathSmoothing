@@ -1,7 +1,7 @@
 # utils.py
 import matplotlib.pyplot as plt
 import numpy as np
-from robot_state import *
+from src.path_smoothing.robot.robot_state import *
 
 import matplotlib.pyplot as plt
 

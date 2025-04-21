@@ -1,7 +1,7 @@
 # map_generator.py
 import numpy as np
 import random
-from config import *
+from src.path_smoothing.config import *
 
 
 def generate_sparse_map(seed=None):

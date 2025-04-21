@@ -1,9 +1,8 @@
 # path_planner.py
 import heapq
 import math
-import matplotlib.pyplot as plt
 from shapely.geometry import Point, LineString  # 添加Point的显式导入
-from discrete_graph import is_valid_connection
+
 
 class PathPlanner:
     def __init__(self, graph, game_map):

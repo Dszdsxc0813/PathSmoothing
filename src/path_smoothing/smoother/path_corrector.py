@@ -1,11 +1,7 @@
-import math
 from typing import List
-
 import numpy as np
 from matplotlib import pyplot as plt
-
-from Map.robot_state import Point
-from robot_state import *
+from src.path_smoothing.robot.robot_state import *
 
 class PathCorrector:
     def __init__(self, turn_radius):
