@@ -173,19 +173,6 @@ class PathCorrector:
         path.extend(arc2)
         path.extend(line1)
 
-        # # --- 7) 生成圆弧 N->Z2 ---
-        # if segment_after_next_end:
-        #     O4_center = self.compute_blend_center(segment_end,
-        #                                           segment_next_end,
-        #                                           segment_after_next_end, R)
-        #     Z2 = self.compute_blend_start(segment_end,
-        #                                   segment_next_end,
-        #                                   segment_after_next_end, R)
-        #     arc3 = self.generate_arc(O4_center, R, N, Z2)
-        #     if visualize_steps and 'arc3' in visualize_steps:
-        #         self._visualize_arc(custom_map, guide_path, optimized_path, arc3, 'Circle O4 Arc: N->Z2')
-        #     path.extend(arc3)
-
         return path
 
     def _compute_O3_and_X(self, A, B, O2_center, current_R, custom_map, guide_path, optimized_path):

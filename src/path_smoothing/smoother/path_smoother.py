@@ -1,7 +1,7 @@
 # path_smoother.py
 import math
 import numpy as np
-from path_corrector import *
+from src.path_smoothing.smoother.path_corrector import *
 from src.path_smoothing.robot.robot_state import *
 from src.path_smoothing.utils.utils import *
 
