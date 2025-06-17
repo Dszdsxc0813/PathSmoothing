@@ -66,7 +66,7 @@ class PathCorrector:
             if visualize_steps and 'centers' in visualize_steps:
                 self._visualize_centers(custom_map, guide_path, optimized_path,
                                         [O2_center, O3_center, X],
-                                        ['O2', 'O3', 'X'])
+                                        ['O1', 'O2', 'X'])
 
             arc1 = self.generate_arc( O2_center, R, Z, X, turn_direction)
             # 6) 直线 X->N
@@ -107,7 +107,7 @@ class PathCorrector:
         if visualize_steps and 'centers' in visualize_steps:
             self._visualize_centers(custom_map, guide_path, optimized_path,
                                     [O2_center, O3_center, H],
-                                    ['O2', 'O3', 'H'])
+                                    ['O1', 'O2', 'H'])
 
         # 4) 圆弧 Z->H
         arc1 = self.generate_arc(O2_center, R, Z, H, turn_direction)
@@ -283,8 +283,10 @@ class PathCorrector:
         B_x = -2 * x_O3 - 2 * k ** 2 * x1 + 2 * k * y1 - 2 * k * y_O3
         C_x = x_O3**2 + k**2 * x1**2 - 2 * k * x1 * y1 + 2 * k * y_O3 * x1 + y1 ** 2 - 2 * y_O3 * y1 + y_O3 ** 2 - R**2
         disc2 = B_x**2 - 4 * A_x * C_x
-        if disc2 < 0:
+        if disc2 < -1e-9:
             raise ValueError("No intersection for O3 and AB")
+        if abs(disc2)<1e-9:
+            disc2 = 0
         sqrt2 = math.sqrt(disc2)
         sols = [(-B_x + sqrt2) / (2 * A_x), (-B_x - sqrt2) / (2 * A_x)]
         X_candidates = []
@@ -892,7 +894,7 @@ class PathCorrector:
                           fill=False,
                           edgecolor='orange',
                           linewidth=2,
-                          label='圆 O2')
+                          label='圆 O1')
             ax.add_patch(circ)
 
         # 起点/终点
